@@ -99,33 +99,22 @@ int delay(unsigned long mikros) {
 }
 
 static volatile int value = 0;
+  int fd;
 
 int measure() {
-  int file_i2c;
   int length;
   unsigned char buffer[60] = {0};
 
-  //----- OPEN THE I2C BUS -----
-  char *filename = (char *)"/dev/i2c-1";
-  if ((file_i2c = open(filename, O_RDWR)) < 0) {
-    // ERROR HANDLING: you can check errno to see what went wrong
-    printf("Failed to open the i2c bus");
-    return 0;
-  }
 
   int addr = 0x6d; //<<<<<The I2C address of the slave
-  if (ioctl(file_i2c, I2C_SLAVE, addr) < 0) {
+  if (ioctl(fd, I2C_SLAVE, addr) < 0) {
     printf("Failed to acquire bus access and/or talk to slave.\n");
     // ERROR HANDLING; you can check errno to see what went wrong
     return 0;
   }
   //----- READ BYTES -----
-
-  int fd;
-  fd = open("/dev/i2c-1", O_RDWR);
   char val[3];
-  ioctl(fd, I2C_SLAVE_FORCE, 0x6d);
-  i2c_smbus_write_byte_data(fd, 0x30, 0x0b); // enable periodic meausure
+
   for (int i = 0; i < 3; i++) {
     const __u8 reg = 0x6 + i;
     // Using SMBus commands
@@ -135,21 +124,25 @@ int measure() {
       printf("Oh dear, something went wrong with "
              "i2c_smbus_read_byte_data()>i2c_smbus_access()>ioctl()! %s\n",
              strerror(errno));
-      exit(EXIT_FAILURE);
+     return 0;
     } else {
       // res contains the read word
     }
     val[i] = result;
   }
-  close(fd);
 
   value = val[0] << 16 | val[1] << 8 | val[2];
 
   return value;
 }
 
+bool pump=false;
+
 int main(void) {
   using namespace httplib;
+  fd = open("/dev/i2c-1", O_RDWR);
+  ioctl(fd, I2C_SLAVE_FORCE, 0x6d);
+  i2c_smbus_write_byte_data(fd, 0x30, 0x0b); // enable periodic meausure
 
   // Set up gpi pointer for direct register access
   setup_io();
@@ -159,17 +152,27 @@ int main(void) {
   OUT_GPIO(12);
   OUT_GPIO(16);
   OUT_GPIO(20);
+  bool m=false;
 
   GPIO_CLR = 1 << 3;
   int gpio_map[] = {0, 7, 1, 12, 16, 20};
 
   std::thread t([&]() {
     while (1) {
+      if(m) {
       int cur = measure();
-      if (cur > 16035268)
+      if(pump) 
+      {
+      if(cur<10413)
         GPIO_SET = 1 << (gpio_map[4]);
-      if (cur < 13767437)
+      else if (cur > 16377216)
+        GPIO_SET = 1 << (gpio_map[4]);
+      else if (cur < 15067437)
         GPIO_CLR = 1 << (gpio_map[4]);
+      }else {
+        GPIO_CLR = 1 << (gpio_map[4]);
+      }
+      }
 
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
@@ -180,32 +183,22 @@ int main(void) {
   svr.Get("/hi", [](const Request &req, Response &res) {
     res.set_content("Hello World!", "text/plain");
   });
-  svr.Get("/msr", [](const Request &req, Response &res) {
+  svr.Get("/msr", [&](const Request &req, Response &res) {
+    m=true;
     res.set_content("pump:" + std::to_string(value), "text/plain");
   });
 
-  svr.Get("/abba", [](const Request &req, Response &res) {
-    printf("Measure\n");
-    for (int a = 0; a < 5; a++) {
-      printf("%d\n", GET_GPIO(2));
-    }
-    int val = 0;
-    for (int i = 0; i < 24; i++) {
-      GPIO_SET = 1 << 3;
-      delay(1);
-      if (GET_GPIO(2) == 0) {
-        val = val << 1;
-      } else {
-        val = val << 1;
-        val = val | 1;
-      }
-      GPIO_CLR = 1 << 3;
-      delay(1);
-    }
-    printf("Val %d \t (0x%x)\n", val, val);
-
-    printf("\n");
-    res.set_content("Hello World!", "text/plain");
+  svr.Get("/pumpON", [&](const Request &req, Response &res) {
+    pump=true;
+    delay(10000);
+    GPIO_SET = 1 << (gpio_map[4]);
+    delay(10000);
+    res.set_content("Pump ON", "text/plain");
+  });
+  svr.Get("/pumpOFF", [&](const Request &req, Response &res) {
+    pump=false;
+    GPIO_CLR = 1 << (gpio_map[4]);
+    res.set_content("Pump OFF", "text/plain");
   });
   svr.Get(R"(/on/(\d+))", [&](const Request &req, Response &res) {
     auto numbers = req.matches[1];
