@@ -1,0 +1,14 @@
+[Unit]
+Description=V4L Video Streaming
+After=network-online.target
+ 
+[Service]
+ExecStart=/home/pi/RpiGPIOActuator/a.out
+WorkingDirectory=/tmp
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=root
+ 
+[Install]
+WantedBy=multi-user.target
